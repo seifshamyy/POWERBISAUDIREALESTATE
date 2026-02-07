@@ -46,8 +46,22 @@ async def scrape_deals(filters: dict):
                 return {"data": text_content, "status": "success"}
             else:
                 # Fallback: Capture a screenshot API style or just all text
-                all_text = await page.locator(".visualContainerGroup").inner_text()
-                return {"data": all_text, "status": "partial_success", "message": "Could not identify table visual specifically."}
+                print("Table visual class not found, trying generic containers...")
+                visuals = page.locator(".visualContainerGroup")
+                count = await visuals.count()
+                collected_text = []
+                
+                # Iterate through all visual containers to gather text
+                for i in range(count):
+                    try:
+                        text = await visuals.nth(i).inner_text()
+                        if text and len(text.strip()) > 50: # Only keep substantial content
+                            collected_text.append(f"--- Container {i} ---\n{text}")
+                    except Exception as e:
+                        print(f"Error reading container {i}: {e}")
+                
+                full_text = "\n\n".join(collected_text)
+                return {"data": full_text, "status": "partial_success", "message": f"Extracted text from {count} visual containers."}
                 
         except Exception as e:
             print(f"Error during scraping: {e}")
