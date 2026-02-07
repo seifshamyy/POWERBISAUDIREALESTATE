@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from playwright.async_api import async_playwright
 
 POWERBI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNGI5OWM4NzctMDExNS00ZTBhLWIxMmYtNzIyMTJmYTM4MzNjIiwidCI6IjMwN2E1MzQyLWU1ZjgtNDZiNS1hMTBlLTBmYzVhMGIzZTRjYSIsImMiOjl9"
@@ -102,13 +103,28 @@ async def scrape_deals(filters: dict):
                         collected_text.append(f"--- Container {i} ---\n{text}")
                 
                 full_text = "\n\n".join(collected_text)
-                return {"data": full_text, "status": "partial_success", "message": "Grid role not found, dumped containers."}
+                
+                # Take a screenshot to show what happened
+                screenshot_bytes = await page.screenshot(type='jpeg', quality=50)
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                
+                return {
+                    "data": full_text, 
+                    "status": "partial_success", 
+                    "message": "Grid role not found, dumped containers.",
+                    "screenshot": screenshot_b64
+                }
                 
         except Exception as e:
             print(f"Error during scraping: {e}")
-            screenshot_path = "error_screenshot.png"
-            await page.screenshot(path=screenshot_path)
-            return {"status": "error", "message": str(e), "screenshot": screenshot_path}
+            # Try to grab a screenshot even on error
+            try:
+                screenshot_bytes = await page.screenshot(type='jpeg', quality=50)
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+            except:
+                screenshot_b64 = None
+                
+            return {"status": "error", "message": str(e), "screenshot": screenshot_b64}
         finally:
             await browser.close()
 
