@@ -4,135 +4,146 @@ from playwright.async_api import async_playwright
 
 POWERBI_URL = "https://app.powerbi.com/view?r=eyJrIjoiNGI5OWM4NzctMDExNS00ZTBhLWIxMmYtNzIyMTJmYTM4MzNjIiwidCI6IjMwN2E1MzQyLWU1ZjgtNDZiNS1hMTBlLTBmYzVhMGIzZTRjYSIsImMiOjl9"
 
-# Original coordinates were calibrated for 1280x800 viewport
-ORIGINAL_VIEWPORT = {"width": 1280, "height": 800}
+# Verified coordinates from browser inspection (for ~1200x800 viewport)
+COORDS = {
+    "start_date": (69, 68),
+    "end_date": (164, 68),
+    "city_dropdown": (711, 148),
+    "city_search": (722, 177),
+    "details_view": (976, 364),  # 4th sidebar icon
+}
 
 async def scrape_deals(filters: dict):
     """
-    Scrapes real estate deal details from the MOJ PowerBI report based on provided filters.
+    Scrapes real estate deal details from the MOJ PowerBI report.
+    Uses verified coordinates and JavaScript for reliable filter application.
     """
     debug_info = []
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Use ORIGINAL viewport to match the coordinate calibration
-        context = await browser.new_context(viewport=ORIGINAL_VIEWPORT)
+        # Use viewport close to browser inspection size
+        context = await browser.new_context(viewport={"width": 1200, "height": 800})
         page = await context.new_page()
         
         try:
             debug_info.append("Step 1: Navigating to PowerBI...")
             await page.goto(POWERBI_URL, wait_until="networkidle", timeout=60000)
             
-            # Wait for report content to load
+            # Wait for report to fully load
             await page.wait_for_selector("div.visual", timeout=60000)
+            await page.wait_for_timeout(5000)
             debug_info.append("Step 2: Report loaded.")
             
-            # Wait extra time for all animations to settle
-            await page.wait_for_timeout(5000)
-            
-            # CRITICAL STEP: Switch to "Details" View
-            # Use JavaScript to find all navigation elements
-            debug_info.append("Step 3: Attempting to find navigation elements...")
-            
-            # Try multiple strategies
-            switched = False
-            
-            # Strategy 1: Find button by aria-label containing "التفاصيل" or "Details"
-            nav_buttons = await page.evaluate('''() => {
-                const buttons = document.querySelectorAll('[role="button"], button, [tabindex="0"]');
-                return Array.from(buttons).map(b => ({
-                    text: b.innerText || b.textContent,
-                    ariaLabel: b.getAttribute('aria-label'),
-                    className: b.className,
-                    tagName: b.tagName
-                })).slice(0, 30);
-            }''')
-            debug_info.append(f"Found {len(nav_buttons)} potential buttons")
-            
-            # Strategy 2: Click on the right sidebar area (4th icon)
-            # Original subagent coordinates: (975, 350) for 1280x800
-            if not switched:
-                debug_info.append("Step 4: Clicking sidebar at (975, 350)...")
-                await page.mouse.click(975, 350)
-                await page.wait_for_timeout(5000)
+            # STEP 3: Apply Date Filters using JavaScript (most reliable)
+            if filters.get("start_date") and filters.get("end_date"):
+                debug_info.append(f"Step 3: Setting dates via JS: {filters['start_date']} - {filters['end_date']}")
                 
-                # Check if we're on a different view by looking for table elements
-                table_check = await page.evaluate('''() => {
-                    const tables = document.querySelectorAll('[role="grid"], [role="table"], .tableEx');
-                    return tables.length;
-                }''')
-                debug_info.append(f"Tables after click: {table_check}")
+                date_result = await page.evaluate(f'''(() => {{
+                    const inputs = document.querySelectorAll('input.date-slicer-datepicker');
+                    if (inputs.length >= 2) {{
+                        // Clear and set start date
+                        inputs[0].value = '{filters["start_date"]}';
+                        inputs[0].dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        inputs[0].dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        
+                        // Clear and set end date
+                        inputs[1].value = '{filters["end_date"]}';
+                        inputs[1].dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        inputs[1].dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        
+                        // Trigger update
+                        inputs[1].dispatchEvent(new KeyboardEvent('keydown', {{ 
+                            key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true 
+                        }}));
+                        return 'success';
+                    }}
+                    return 'no_inputs_found';
+                }})()''')
                 
-                if table_check > 0:
-                    switched = True
-                    debug_info.append("Successfully switched to table view!")
-            
-            # Strategy 3: Try keyboard navigation if click didn't work
-            if not switched:
-                debug_info.append("Step 5: Trying keyboard navigation...")
-                # Tab through the page to find navigation
-                for i in range(10):
-                    await page.keyboard.press("Tab")
-                    await page.wait_for_timeout(200)
-                await page.keyboard.press("Enter")
+                debug_info.append(f"Date JS result: {date_result}")
                 await page.wait_for_timeout(3000)
             
-            # Take a screenshot after navigation attempt
-            screenshot_after_nav = await page.screenshot(type='jpeg', quality=50)
+            # STEP 4: Apply City Filter (if specified)
+            city_filter = filters.get("city")
+            if city_filter:
+                debug_info.append(f"Step 4: Selecting city: {city_filter}")
+                
+                # Open city dropdown
+                await page.mouse.click(*COORDS["city_dropdown"])
+                await page.wait_for_timeout(1000)
+                
+                # Click search box and type city name using clipboard (for Arabic support)
+                await page.mouse.click(*COORDS["city_search"])
+                await page.wait_for_timeout(500)
+                
+                # Use JavaScript to set the search value (handles Arabic)
+                await page.evaluate(f'''(() => {{
+                    const searchInput = document.querySelector('.searchInput input, input[placeholder*="Search"]');
+                    if (searchInput) {{
+                        searchInput.value = '{city_filter}';
+                        searchInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    }}
+                }})()''')
+                
+                await page.wait_for_timeout(1500)
+                
+                # Click first checkbox result
+                await page.mouse.click(732, 345)
+                await page.wait_for_timeout(2000)
+                
+                # Close dropdown by clicking elsewhere
+                await page.mouse.click(500, 300)
+                await page.wait_for_timeout(1000)
+                
+                debug_info.append("City filter applied")
             
-            # Apply Date Filters
-            if filters.get("start_date") and filters.get("end_date"):
-                debug_info.append(f"Step 6: Applying date filters: {filters['start_date']} - {filters['end_date']}")
-                await apply_date_filter(page, filters["start_date"], filters["end_date"])
-                await page.wait_for_timeout(8000)
+            # STEP 5: Switch to Details View
+            debug_info.append("Step 5: Switching to Details view...")
+            await page.mouse.click(*COORDS["details_view"])
+            await page.wait_for_timeout(5000)
+            
+            # Verify we're in Details view by checking for table/grid
+            table_check = await page.evaluate('''() => {
+                const tables = document.querySelectorAll('.tableEx, [role="grid"], [role="table"]');
+                return tables.length;
+            }''')
+            debug_info.append(f"Tables found: {table_check}")
             
             # Wait for data to load
             await page.wait_for_timeout(3000)
             
-            # Data Extraction - Try multiple approaches
-            debug_info.append("Step 7: Extracting data...")
+            # STEP 6: Extract Data
+            debug_info.append("Step 6: Extracting data...")
             
-            # Approach 1: Look for grid cells
-            grid_cells = await page.evaluate('''() => {
+            # Try to get grid cells first
+            grid_data = await page.evaluate('''() => {
                 const cells = document.querySelectorAll('[role="gridcell"], [role="cell"], [role="rowheader"]');
                 return Array.from(cells).map(c => c.innerText).filter(t => t && t.trim());
             }''')
             
-            if grid_cells and len(grid_cells) > 10:
-                debug_info.append(f"Found {len(grid_cells)} grid cells!")
-                # Take final screenshot
+            if grid_data and len(grid_data) > 10:
+                debug_info.append(f"Extracted {len(grid_data)} grid cells")
                 screenshot_bytes = await page.screenshot(type='jpeg', quality=50)
                 screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
                 
                 return {
-                    "data": "\n".join(grid_cells[:500]),
+                    "data": "\n".join(grid_data[:500]),
                     "status": "success",
-                    "count": len(grid_cells),
+                    "count": len(grid_data),
                     "debug": debug_info,
                     "screenshot": screenshot_b64
                 }
             
-            # Approach 2: Get all text from the page body
-            debug_info.append("Approach 2: Extracting all page text...")
+            # Fallback: Extract all visible text
             all_text = await page.evaluate('''() => {
-                // Get text from the main content area
-                const content = document.querySelector('.visualContainerHost') || document.body;
-                return content.innerText;
+                return document.body.innerText;
             }''')
             
-            # Take final screenshot
-            screenshot_bytes = await page.screenshot(type='jpeg', quality=50)
-            screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-            
-            # Filter and clean the text
             lines = [line.strip() for line in all_text.split('\n') if line.strip()]
             
-            # Apply city filter if specified
-            city_filter = filters.get("city")
-            if city_filter:
-                filtered = [line for line in lines if city_filter in line]
-                if filtered:
-                    lines = filtered
+            screenshot_bytes = await page.screenshot(type='jpeg', quality=50)
+            screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
             
             return {
                 "data": "\n".join(lines[:500]),
@@ -159,34 +170,10 @@ async def scrape_deals(filters: dict):
         finally:
             await browser.close()
 
-async def apply_date_filter(page, start_date, end_date):
-    """
-    Applies the date filter using coordinates calibrated for 1280x800 viewport.
-    Original subagent coordinates: Start Date at (66, 68), End Date at (161, 68)
-    """
-    try:
-        # Start Date
-        await page.mouse.click(66, 68)
-        await page.wait_for_timeout(500)
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Backspace")
-        await page.keyboard.type(start_date, delay=50)
-        await page.keyboard.press("Enter")
-        
-        await page.wait_for_timeout(1500)
-        
-        # End Date
-        await page.mouse.click(161, 68)
-        await page.wait_for_timeout(500)
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Backspace")
-        await page.keyboard.type(end_date, delay=50)
-        await page.keyboard.press("Enter")
-        
-        print("Date filters applied via coordinates.")
-        
-    except Exception as e:
-        print(f"Failed to apply date filters: {e}")
-
 if __name__ == "__main__":
-    asyncio.run(scrape_deals({"start_date": "01/01/2026", "end_date": "01/31/2026"}))
+    result = asyncio.run(scrape_deals({
+        "start_date": "01/01/2026", 
+        "end_date": "01/31/2026",
+        "city": None
+    }))
+    print(result)
