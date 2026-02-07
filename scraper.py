@@ -21,6 +21,16 @@ async def scrape_deals(filters: dict):
             await page.wait_for_selector("div.visual", timeout=30000)
             print("Report loaded.")
             
+            # CRITICAL STEP: Switch to "Details" View
+            # The report defaults to a summary dashboard. We must click the "Details" icon on the sidebar.
+            # Based on successful manual navigation, this is at (975, 350).
+            try:
+                print("Clicking sidebar icon to switch to 'Details' view...")
+                await page.mouse.click(975, 350)
+                await page.wait_for_timeout(3000) # Wait for view transition
+            except Exception as e:
+                print(f"Error clicking sidebar: {e}")
+
             # Apply Date Filters
             if filters.get("start_date") and filters.get("end_date"):
                 print(f"Applying filters: {filters['start_date']} - {filters['end_date']}")
