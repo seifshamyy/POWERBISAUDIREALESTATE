@@ -10,7 +10,8 @@ async def scrape_deals(filters: dict):
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1280, "height": 800})
+        # Use full HD viewport to ensure sidebar layout matches desktop
+        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await context.new_page()
         
         try:
@@ -18,19 +19,34 @@ async def scrape_deals(filters: dict):
             await page.goto(POWERBI_URL, wait_until="networkidle")
             
             # Wait for report content to load
-            # PowerBI reports are canvas based, so we wait for the main visual container
             await page.wait_for_selector("div.visual", timeout=30000)
             print("Report loaded.")
             
             # CRITICAL STEP: Switch to "Details" View
-            # The report defaults to a summary dashboard. We must click the "Details" icon on the sidebar.
-            # Based on successful manual navigation, this is at (975, 350).
+            # Coordinate clicks are fragile. We try to find the text "التفاصيل" (Details) which is part of the navigator.
             try:
-                print("Clicking sidebar icon to switch to 'Details' view...")
-                await page.mouse.click(975, 350)
-                await page.wait_for_timeout(3000) # Wait for view transition
+                print("Attempting to switch to 'Details' view via text locator...")
+                # Look for the text specifically
+                details_text = page.locator("text='التفاصيل'")
+                if await details_text.count() > 0:
+                    await details_text.first.click()
+                    print("Clicked 'التفاصيل'.")
+                    await page.wait_for_timeout(5000)
+                else:
+                    # Fallback to English
+                    details_text_en = page.locator("text='Details'")
+                    if await details_text_en.count() > 0:
+                        await details_text_en.first.click()
+                        print("Clicked 'Details'.")
+                        await page.wait_for_timeout(5000)
+                    else:
+                        # Final Fallback to Coordinates (adjusted for 1920x1080 if needed, but original was 1280x800)
+                        # We will try the original coordinate just in case, or a relative position
+                        print("Text locator failed. Retrying coordinate click...")
+                        await page.mouse.click(975, 350) 
+                        await page.wait_for_timeout(3000)
             except Exception as e:
-                print(f"Error clicking sidebar: {e}")
+                print(f"Error switching view: {e}")
 
             # Apply Date Filters
             if filters.get("start_date") and filters.get("end_date"):
