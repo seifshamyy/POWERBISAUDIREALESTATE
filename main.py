@@ -4,15 +4,19 @@ Uses Anthropic Computer Use for vision-based browser automation.
 """
 
 import os
+import sys
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
 
-from computer_use_agent import ComputerUseAgent
-
 load_dotenv()
+
+# Lazy import to avoid startup issues
+def get_agent():
+    from computer_use_agent import ComputerUseAgent
+    return ComputerUseAgent
 
 app = FastAPI(
     title="MOJ Real Estate Extractor",
@@ -72,6 +76,7 @@ async def extract_data(request: ExtractionRequest):
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
     
     try:
+        ComputerUseAgent = get_agent()
         agent = ComputerUseAgent(api_key)
         result = await agent.run(request.query)
         
