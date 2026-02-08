@@ -1,45 +1,93 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from query_engine import parse_query
-from scraper import scrape_deals
+"""
+MOJ Real Estate Extractor API
+Uses Anthropic Computer Use for vision-based browser automation.
+"""
+
 import os
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from dotenv import load_dotenv
 
-app = FastAPI(title="MOJ Real Estate AI Extractor")
+from computer_use_agent import ComputerUseAgent
 
-class QueryRequest(BaseModel):
+load_dotenv()
+
+app = FastAPI(
+    title="MOJ Real Estate Extractor",
+    description="AI-powered extraction from Saudi MOJ PowerBI using Anthropic Computer Use",
+    version="2.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class ExtractionRequest(BaseModel):
     query: str
+    
+    
+class ExtractionResponse(BaseModel):
+    query: str
+    status: str
+    data: Optional[str] = None
+    steps: list = []
+    message: Optional[str] = None
+    screenshot: Optional[str] = None
+
 
 @app.get("/")
-def read_root():
-    return {"status": "ok", "message": "MOJ Real Estate Extractor is running. Use POST /extract to get data."}
+async def root():
+    return {
+        "service": "MOJ Real Estate Extractor",
+        "version": "2.0.0",
+        "engine": "Anthropic Computer Use",
+        "status": "operational"
+    }
 
-@app.post("/extract")
-async def extract_data(request: QueryRequest):
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+
+@app.post("/extract", response_model=ExtractionResponse)
+async def extract_data(request: ExtractionRequest):
     """
-    Endpoint to extract real estate data based on natural language query.
+    Extract real estate data based on natural language query.
+    
+    Examples:
+    - "Get deals for the past week"
+    - "Show me real estate transactions in Riyadh for January 2026"
+    - "Extract commercial property deals for the last month"
     """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    
     try:
-        # 1. Parse the natural language query into filters
-        filters = parse_query(request.query)
-        print(f"Parsed Filters: {filters}")
+        agent = ComputerUseAgent(api_key)
+        result = await agent.run(request.query)
         
-        if not filters:
-            raise HTTPException(status_code=400, detail="Could not understand the query.")
-            
-        # 2. Scrape data using Playwright
-        result = await scrape_deals(filters)
-        
-        return {
-            "query": request.query,
-            "interpreted_filters": filters,
-            "result": result
-        }
+        return ExtractionResponse(
+            query=request.query,
+            status=result.get("status", "unknown"),
+            data=result.get("data"),
+            steps=result.get("steps", []),
+            message=result.get("message"),
+            screenshot=result.get("screenshot")
+        )
         
     except Exception as e:
-        print(f"Error processing request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
